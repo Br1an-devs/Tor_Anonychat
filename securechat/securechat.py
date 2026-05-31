@@ -81,12 +81,17 @@ def run_host(port: int) -> None:
         _p(G  + "  Code  : " + CB + code + R)
         _p()
         _p(DIM + "  (send both to your guest over a secure channel)" + R)
-    else:
+    elif not tor_mode:
+        # Only call get_local_ip() in direct (non-Tor) mode — never under torsocks
         my_ip = get_local_ip()
         _p(G  + "  Your IP : " + CB + my_ip + R)
         _p(G  + "  Code    : " + CB + code + R)
         _p()
         _p(DIM + "  (share both with your guest)" + R)
+    else:
+        _p(G  + "  Code  : " + CB + code + R)
+        _p()
+        _p(DIM + "  (share your onion address and this code with your guest)" + R)
 
     _p()
     _p(DIM + "  Port: " + str(port) + "  |  Auto-timeout: 15 minutes" + R)
