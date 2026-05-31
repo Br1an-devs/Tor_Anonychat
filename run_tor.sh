@@ -205,6 +205,7 @@ print(generate_session_code())
 
     export SECURECHAT_TOR_MODE=1
     export SECURECHAT_SESSION_CODE="$SESSION_CODE"
+    export ONION="$HOST_ONION"
 
     python3 -m securechat host --port 57311
 }
