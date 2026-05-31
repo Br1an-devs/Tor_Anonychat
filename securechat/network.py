@@ -117,6 +117,7 @@ def peer_connect(
     port: int = DEFAULT_PORT,
     on_status: callable = None,
     timeout: int = 900,
+    via_tor: bool = False,
 ) -> socket.socket:
     """
     Connect to the host and perform the encrypted handshake.
@@ -124,14 +125,20 @@ def peer_connect(
 
     Parameters
     ----------
-    host_ip   : IP address of the host
+    host_ip   : IP address or .onion hostname of the host
     code      : session code (must match host's code)
     port      : TCP port of the host
     on_status : optional callback(message: str) for status updates
     timeout   : seconds before giving up
+    via_tor   : True when connecting to a .onion hidden service via torsocks;
+                uses a longer handshake timeout to account for Tor latency
     """
     key   = crypto.derive_key(code)
     start = time.monotonic()
+
+    # Tor circuits can take 10-30 s to establish; give the handshake more room
+    handshake_timeout = 60 if via_tor else 15
+    connect_timeout   = 30 if via_tor else 10
 
     def _status(msg):
         if on_status:
@@ -142,18 +149,24 @@ def peer_connect(
         if elapsed >= timeout:
             raise TimeoutError("Could not connect within the timeout window")
 
-        _status(f"Connecting to {host_ip}:{port}...")
+        if via_tor:
+            _status(f"[TOR] Routing to {host_ip}:{port} via Tor circuit...")
+        else:
+            _status(f"Connecting to {host_ip}:{port}...")
 
         try:
-            conn = socket.create_connection((host_ip, port), timeout=10)
+            conn = socket.create_connection((host_ip, port), timeout=connect_timeout)
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
             _status(f"Not reachable yet ({e}) — retrying in {CONNECT_RETRY}s...")
             time.sleep(CONNECT_RETRY)
             continue
 
-        _status("TCP connected — authenticating session code...")
+        if via_tor:
+            _status("Tor circuit established — authenticating session code...")
+        else:
+            _status("TCP connected — authenticating session code...")
 
-        conn.settimeout(15)
+        conn.settimeout(handshake_timeout)
         ok = protocol.perform_handshake_peer(conn, key)
         if not ok:
             conn.close()

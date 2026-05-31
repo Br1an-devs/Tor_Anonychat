@@ -65,11 +65,19 @@ class ChatUI:
     Sends messages via the injected Session object.
     """
 
-    def __init__(self, session: Session, role: str, peer_label: str = "Peer"):
+    def __init__(
+        self,
+        session: Session,
+        role: str,
+        you_label: str = "You",
+        peer_label: str = "Peer",
+        via_tor: bool = False,
+    ):
         self._session     = session
         self._role        = role
         self._peer_label  = peer_label
-        self._you_label   = "You"
+        self._via_tor     = via_tor
+        self._you_label   = you_label
 
         self._messages: deque = deque(maxlen=MAX_HISTORY)
         self._msg_lock  = threading.Lock()
@@ -273,15 +281,28 @@ class ChatUI:
             pass
         scr.attroff(curses.color_pair(cp) | curses.A_BOLD)
 
-        # Right: role + time
-        right = f"{self._role}  {time.strftime('%H:%M:%S')}  "
+        # Right: [TOR] badge (if applicable) + role + time
+        tor_badge    = " [TOR]" if self._via_tor else ""
+        right_suffix = f" {self._role}  {time.strftime('%H:%M:%S')}  "
+        right = tor_badge + right_suffix
         rx = max(0, w - len(right) - 1)
-        scr.attron(curses.color_pair(CP_HEADER))
-        try:
-            scr.addstr(0, rx, right[:w - rx - 1])
-        except curses.error:
-            pass
-        scr.attroff(curses.color_pair(CP_HEADER))
+        if self._via_tor:
+            try:
+                scr.attron(curses.color_pair(CP_WARN) | curses.A_BOLD)
+                scr.addstr(0, rx, tor_badge[:w - rx - 1])
+                scr.attroff(curses.color_pair(CP_WARN) | curses.A_BOLD)
+                scr.attron(curses.color_pair(CP_HEADER))
+                scr.addstr(0, rx + len(tor_badge), right_suffix[:w - rx - len(tor_badge) - 1])
+                scr.attroff(curses.color_pair(CP_HEADER))
+            except curses.error:
+                pass
+        else:
+            scr.attron(curses.color_pair(CP_HEADER))
+            try:
+                scr.addstr(0, rx, right[:w - rx - 1])
+            except curses.error:
+                pass
+            scr.attroff(curses.color_pair(CP_HEADER))
 
         # Separator
         scr.attron(curses.color_pair(CP_BORDER))
@@ -436,7 +457,7 @@ class ChatUI:
                 label  = self._peer_label
                 attr   = curses.color_pair(CP_PEER) | curses.A_BOLD
 
-            prefix = f"[{ts}]  {label:<6}: "
+            prefix = f"[{ts}]  {label:<10}: "
             lines  = textwrap.wrap(body, width=max_w) or [""]
             result = []
             for i, line in enumerate(lines):

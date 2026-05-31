@@ -76,20 +76,20 @@ bash run.sh host
 SecureChat will:
 1. Generate a random one-time code like `R7KP-Q2MN-A5VX`
 2. Display your LAN IP address
-3. Wait for the peer to connect (up to 15 minutes)
+3. Wait for the guest to connect (up to 15 minutes)
 
 Share **both the code and your IP** with the other person over any channel (phone call, Signal, etc.).
 
 ---
 
-### Connect to a session
+### Connect to a session (as guest)
 
 ```bash
 bash run.sh connect
 ```
 
 SecureChat will prompt for:
-1. The host's IP address
+1. The host's IP address (or `.onion` address when using Tor)
 2. The session code
 
 ---
@@ -103,7 +103,47 @@ bash run.sh connect --port 9999
 
 ---
 
-## In-chat commands
+## Using Tor for IP anonymity
+
+`run_tor.sh` wraps SecureChat in a Tor hidden service so neither party's IP address is revealed to the other — or to a network observer.
+
+```bash
+bash run_tor.sh
+```
+
+### How it works
+
+| Side | What runs | Why |
+|---|---|---|
+| **Host** | `python3 securechat.py host` (plain) | Binds to `127.0.0.1:57311`; Tor routes the hidden service inbound to that port. No torsocks needed. |
+| **Guest** | `torsocks python3 securechat.py connect` | Tor resolves and tunnels the TCP connection to the `.onion` address. |
+
+### Workflow
+
+**Host:**
+1. Run `bash run_tor.sh` → choose **[1] Host**.
+2. Your `.onion` address is displayed (e.g. `abc123…xyz.onion`).
+3. Share the `.onion` address **and** the session code with the guest.
+4. Wait — SecureChat listens normally; Tor delivers the connection.
+
+**Guest:**
+1. Run `bash run_tor.sh` → choose **[2] Connect**.
+2. Enter the `.onion` address and session code when prompted.
+3. `torsocks` tunnels the connection through Tor automatically.
+4. The UI header shows a `[TOR]` badge confirming the Tor path.
+
+> **Note:** Tor circuits can take 15–30 seconds to establish. `run_tor.sh` uses a 60-second handshake timeout (vs 15 s for direct connections) to accommodate this.
+
+### Requirements for Tor mode
+
+```bash
+sudo apt install tor torsocks   # Debian/Ubuntu/Kali
+sudo systemctl start tor
+```
+
+`run_tor.sh` will install and start these automatically if missing.
+
+---
 
 | Command | Action |
 |---|---|
@@ -168,7 +208,7 @@ The two machines connect **directly** over TCP. There is no relay server, no int
 ### What SecureChat does NOT provide
 
 - **Forward secrecy**: The session key is derived from the code for the entire session. A compromise of the code retroactively breaks the session. For true forward secrecy, a Diffie-Hellman key exchange (e.g. X25519) would be added — a planned v3 feature.
-- **Anonymity**: Your IP address is shared with the peer (you gave it to them). It is also visible to your ISP and anyone monitoring your network.
+- **Anonymity**: By default, your IP address is shared with the peer and visible to your ISP. Use `run_tor.sh` for IP anonymity via Tor hidden services.
 - **Multi-party**: Exactly two people per session.
 - **File transfer**: Text only in v2.
 
