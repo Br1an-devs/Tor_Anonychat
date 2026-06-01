@@ -33,8 +33,7 @@ pip install cryptography
 
 That's it. No build step. No compilation.
 
-For detailed instructions on how to use secure chat[![*CLICK HERE*](./Test_sample/test.txt)]
-
+**For detailed instructions on how to use secure chat [*CLICK HERE*](./Test_sample/test.txt)**
 # SecureChat — Tor Hidden Service
 
 ## How to use
