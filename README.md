@@ -22,10 +22,10 @@ SecureChat is a peer-to-peer encrypted terminal chat application with **no serve
 ```bash
 # 1. Clone or download and unzip
 git clone https://github.com/996savage/Tor_Anonychat 
-cd securechat
+cd Tor_Anonychat
 
 # 2. Make the launcher executable
-chmod +x run.sh
+chmod +x run_tor.sh
 
 # 3. (Optional) Install the Python dependency manually
 pip install cryptography
@@ -33,7 +33,7 @@ pip install cryptography
 
 That's it. No build step. No compilation.
 
-**For detailed instructions on how to use secure chat [*CLICK HERE*](./Test_sample/test.txt)**
+**For detailed instructions on how to use secure chat [*CLICK HERE*](./Test-sample/instructions.txt)**
 # SecureChat — Tor Hidden Service
 
 ## How to use
@@ -116,3 +116,5 @@ After connection Terminal Looks Like this
 </p>
 
 Have fun.
+**FOR SUPPORT🤝**
+[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/YOUR_USERNAME)
