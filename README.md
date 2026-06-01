@@ -1,3 +1,42 @@
+*TOR_ANONYCHAT*
+
+## What is it?
+
+SecureChat is a peer-to-peer encrypted terminal chat application with **no server, no accounts, no logs, and no persistent data**. Two people connect directly using a one-time session code. When the session ends — or times out — every trace is wiped from memory.
+
+---
+
+## Requirements
+
+| Requirement | Details |
+|---|---|
+| **OS** | Linux (Kali, Ubuntu, Debian), macOS, Git Bash / WSL on Windows |
+| **Python** | 3.8 or newer (`python3 --version`) |
+| **Library** | `cryptography` — auto-installed by `run.sh` |
+| **Network** | Both machines must be able to reach each other over TCP (same LAN, or VPN, or port-forwarded) |
+
+---
+
+## Installation
+
+```bash
+# 1. Clone or download and unzip
+git clone https://github.com/you/securechat   # or unzip securechat.zip
+cd securechat
+
+# 2. Make the launcher executable
+chmod +x run.sh
+
+# 3. (Optional) Install the Python dependency manually
+pip install cryptography
+```
+
+That's it. No build step. No compilation.
+
+
+
+
+
 # SecureChat — Tor Hidden Service
 
 ## How to use
@@ -68,3 +107,15 @@ Or use **option 3** in the app menu.
 - The session code is one-time use only
 - No logs, no history, no IP addresses leave either machine
 - All messages are encrypted with AES-256-GCM
+
+  **THIS IS WHAT IT LOOKS LIKE**
+  *For host side*(**WLAN Ip Address Is shown just Incase it is a local Wlan connection**)
+  <p align="center">
+  <img src="./Test-sample/host.jpeg" width="600" />
+</p>
+After connection Terminal Looks Like this
+<p align="center">
+  <img src="./Test-sample/connection.jpeg" width="600" />
+</p>
+
+Have fun
