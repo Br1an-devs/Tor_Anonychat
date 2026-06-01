@@ -117,4 +117,6 @@ After connection Terminal Looks Like this
 
 Have fun.
 **FOR SUPPORT🤝**
-[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/YOUR_USERNAME)
+
+
+[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/briandevs)
