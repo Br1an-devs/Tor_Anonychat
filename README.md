@@ -21,7 +21,7 @@ SecureChat is a peer-to-peer encrypted terminal chat application with **no serve
 
 ```bash
 # 1. Clone or download and unzip
-git clone https://github.com/you/securechat   # or unzip securechat.zip
+git clone https://github.com/996savage/Tor_Anonychat 
 cd securechat
 
 # 2. Make the launcher executable
@@ -33,9 +33,7 @@ pip install cryptography
 
 That's it. No build step. No compilation.
 
-
-
-
+For detailed instructions on how to use secure chat[![*CLICK HERE*](./Test_sample/test.txt)]
 
 # SecureChat — Tor Hidden Service
 
@@ -118,4 +116,4 @@ After connection Terminal Looks Like this
   <img src="./Test-sample/connection.jpeg" width="600" />
 </p>
 
-Have fun
+Have fun.
