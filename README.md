@@ -21,7 +21,7 @@ SecureChat is a peer-to-peer encrypted terminal chat application with **no serve
 
 ```bash
 # 1. Clone or download and unzip
-git clone https://github.com/996savage/Tor_Anonychat 
+https://github.com/Br1an-devs/Tor_Anonychat 
 cd Tor_Anonychat
 
 # 2. Make the launcher executable
