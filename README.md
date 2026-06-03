@@ -2,9 +2,18 @@
 
 ## What is it?
 
-SecureChat is a peer-to-peer encrypted terminal chat application with **no server, no accounts, no logs, and no persistent data**. Two people connect directly using a one-time session code. When the session ends — or times out — every trace is wiped from memory.
-
+SecureChat is a zero-knowledge ephemeral chat application that runs entirely in your terminal. Two people connect directly through a Tor hidden service using a one-time session code. When the session ends — or times out — every trace is wiped from memory. Nothing is written to disk.
+File transfer is built in. You can send any file up to 256 MB, encrypted with the same AES-256-GCM session key as your messages, with SHA-256 integrity verification on receipt.
 ---
+*Security model*
+EncryptionAES-256-GCM — authenticated encryption, no separate MAC needed.
+Key derivationPBKDF2-HMAC-SHA256, 310,000 iterations (OWASP 2023 minimum).
+Nonce12 bytes, random per message — NIST SP 800-38D.
+TransportTor hidden service — no IP address ever leaves either machine.
+Session codeOne-time use, 46-bit entropy, unambiguous Base32 alphabet.
+LogsNone. No history. No files written to disk by the app.
+Timeout15-minute hard session limit, 5-minute warning.
+KeepalivePING/PONG every 30 seconds — dead connections detected within 40 secs.
 
 ## Requirements
 
@@ -64,19 +73,25 @@ sleep 15 && sudo cat /var/lib/tor/securechat/hostname
 Your onion address will look like:
 `abcdef1234567890abcdef1234567890abcdef1234567890abcdef12.onion`
 
-**Save this address. It is permanent as long as you keep the keys in `/var/lib/tor/securechat/`.**
+**Save this address. It is permanent as long as you keep the keys. **
 
 ---
 
-### Get your onion address any time
+### Get your onion address any time 
 
 ```bash
 sudo cat /var/lib/tor/securechat/hostname
 ```
 
-Or use **option 3** in the app menu.
+Or use **option ** in the app menu.
 
 ---
+**Running on LAN without TOR**
+# Host
+bash run.sh host --port 57311
+
+# Guest
+bash run.sh connect --port 57311
 
 ## Session flow
 
