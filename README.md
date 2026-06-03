@@ -66,7 +66,7 @@ sudo bash -c 'printf "\n# SecureChat\nHiddenServiceDir /var/lib/tor/securechat\n
 # If /etc/tor/instances/default/torrc does not exist on your system, use this instead:
 sudo bash -c 'printf "\n# SecureChat\nHiddenServiceDir /var/lib/tor/securechat\nHiddenServicePort 57311 127.0.0.1:57311\n" >> /etc/tor/torrc'
 
-# 2. Create the hidden service directory with correct ownership
+# 2. Create the hidden service directory with correct ownership that is if your encounter a problem with the auto gen option
 sudo mkdir -p /var/lib/tor/securechat
 sudo chown debian-tor:debian-tor /var/lib/tor/securechat
 sudo chmod 700 /var/lib/tor/securechat
