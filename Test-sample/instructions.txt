@@ -46,8 +46,24 @@ If you encounter any Problem with the app you can Reach out for help
 
 
 
+quick summary
 
+In-chat commands
+Once connected, you type messages normally. Commands start with /:
+CommandWhat it does/helpShow all commands/clearClear the message history from screen/quit or /qClose the session cleanly/sendfile <path>Offer a file to your peer/acceptAccept an incoming file offer/rejectDecline an incoming file offer
+Keyboard shortcuts:
+KeyAction↑ / ↓Scroll message historyCtrl-WClear the input lineCtrl-CQuit
 
+File transfer
+Files are transferred in-band over the same encrypted Tor channel as your messages — no second port, no extra connections.
+Sending a file:
+/sendfile ~/documents/report.pdf
+/sendfile /tmp/photo.jpg
+Your peer will see:
+📁  Peer wants to send: report.pdf  (1.2 MB)  — type /accept or /reject
+After they /accept, you'll both see progress:
+📤  report.pdf: 62%  756 KB/1.2 MB  @ 91.3 KB/s
+✅  report.pdf sent successfully in 13.4s (89.6 KB/s avg)
 
 
 
