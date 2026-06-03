@@ -1,30 +1,4 @@
-"""
-securechat/ui.py
-────────────────
-Full-featured curses terminal UI.
 
-Layout (80×24 minimum recommended)
-  ┌──────────────────────────────────────────────────────┐
-  │  SECURECHAT  ●  Connected  │  host  │  14:23:01       │  ← header
-  ├──────────────────────────────────────────────────────┤
-  │                                                       │
-  │  [14:23:05]  Peer: hello                             │  ← message
-  │  [14:23:08]  You : hi there                          │  ← message
-  │  [14:23:10]  ⚙  Peer is typing...                   │  ← sys
-  │                                                       │
-  │                                                       │
-  ├──────────────────────────────────────────────────────┤
-  │  ›  _                                                 │  ← input
-  ├──────────────────────────────────────────────────────┤
-  │  /quit  close  │  /help  commands  │  AES-256-GCM    │  ← footer
-  └──────────────────────────────────────────────────────┘
-
-Key bindings
-  Enter       – send message
-  Ctrl-W      – clear input line
-  Ctrl-C / /quit – close session
-  ↑ / ↓      – scroll history
-"""
 
 import curses
 import threading
@@ -36,8 +10,6 @@ import textwrap
 from .protocol import Message, MsgType
 from .session import Session
 
-
-# ── Colour pair indices ───────────────────────────────────────────────────────
 CP_HEADER   = 1    # header bar
 CP_FOOTER   = 2    # footer bar
 CP_YOU      = 3    # your own messages
@@ -93,7 +65,7 @@ class ChatUI:
 
         self._stdscr    = None
 
-    # ── Thread-safe message ingestion ────────────────────────────────────────
+    #  Thread-safe message
 
     def push_message(self, msg: Message) -> None:
         with self._msg_lock:
@@ -108,7 +80,7 @@ class ChatUI:
         self._close_msg = reason
         self._dirty.set()
 
-    # ── Main entry point ─────────────────────────────────────────────────────
+    # Main entry point
 
     def run(self) -> None:
         curses.wrapper(self._main)
@@ -142,7 +114,7 @@ class ChatUI:
         if not self._closed:
             self._session.close("User quit")
 
-    # ── Key handling ─────────────────────────────────────────────────────────
+    # Key handling 
 
     def _handle_key(self, key: int) -> Optional[str]:
         if key in (curses.KEY_ENTER, 10, 13):
@@ -228,7 +200,7 @@ class ChatUI:
 
         return None
 
-    # ── Rendering ─────────────────────────────────────────────────────────────
+    #  Rendering
 
     def _repaint(self) -> None:
         try:
@@ -329,7 +301,7 @@ class ChatUI:
         except curses.error:
             pass
 
-        footer = "  /quit  │  /help  │  /clear  │  ↑↓ scroll  │  AES-256-GCM  "
+        footer = "  /quit  │  /help  │  /sendfile <path>  │  /accept  /reject  │  AES-256-GCM  "
         if self._closed:
             footer = f"  SESSION ENDED: {self._close_msg[:w-4]}  "
         try:
@@ -442,11 +414,7 @@ class ChatUI:
             return result
 
         elif msg.mtype == MsgType.MSG:
-            # Decide who sent it: if we echoed it ourselves, body is added by _handle_enter
-            # We tag "You" messages with a special attribute check
-            # We can't know for sure here — use a side-channel: messages pushed via
-            # push_message from _handle_enter already carry "You" context.
-            # For simplicity, we store sender info in the body prefix when echoing.
+            
             body = msg.body or ""
             if body.startswith("\x01"):
                 # Outgoing message sentinel
@@ -467,8 +435,6 @@ class ChatUI:
 
         return []
 
-    # ── Colour init ───────────────────────────────────────────────────────────
-
     def _init_colors(self) -> None:
         curses.start_color()
         curses.use_default_colors()
@@ -486,9 +452,6 @@ class ChatUI:
         curses.init_pair(CP_INPUT,  curses.COLOR_WHITE,  bg)
 
 
-# ── Tweak: sentinel for outgoing messages ────────────────────────────────────
-# The UI echoes "You:" messages locally by injecting them with a sentinel byte.
-# This avoids a separate flag on Message (keeping the protocol clean).
 _OUTGOING_SENTINEL = "\x01"
 
 
