@@ -425,6 +425,23 @@ def main() -> None:
     except AttributeError:
         pass  # Windows
 
+    # Ensure curses always restores the terminal even when killed externally
+    # (e.g. by a shell `timeout` command or a process manager sending SIGTERM).
+    # Without this, SIGTERM bypasses curses.wrapper's finally block and leaves
+    # the terminal in raw mode, making every subsequent shell output invisible.
+    def _sigterm_handler(signum, frame):
+        try:
+            import curses as _curses
+            _curses.endwin()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+    except (AttributeError, OSError):
+        pass  # Windows / restricted environments
+
     if args.mode == "host":
         run_host(args.port)
     elif args.mode == "connect":
