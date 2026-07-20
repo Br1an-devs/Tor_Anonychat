@@ -14,11 +14,11 @@ The session exposes two queues:
   inbound  – messages received from remote peer (read by the UI)
   outbound – messages to send (written by the UI)
 
-The keepalive thread sends PING every 30 s and expects PONG within 10 s.
-If no PONG arrives within that window the session is torn down.
+The keepalive thread sends PING every 30 s and warns on missed PONGs,
+but never tears the session down from keepalive alone — only a real
+socket-level disconnect or Ctrl+C ends the chat.
 
-Timeout: if no message (including PING/PONG) is received for IDLE_TIMEOUT
-seconds, the session self-destructs.
+Session runs indefinitely until the user quits with Ctrl+C.
 """
 
 import socket
@@ -35,8 +35,6 @@ log = logging.getLogger("securechat.session")
 
 KEEPALIVE_INTERVAL = 30     # seconds between PINGs
 KEEPALIVE_TIMEOUT  = 10     # seconds to wait for PONG
-KEEPALIVE_MAX_MISSED = 6     # sustained missed PINGs before declaring dead
-IDLE_TIMEOUT       = 900    # 15 minutes — session hard limit
 SOCK_TIMEOUT       = 5      # socket read timeout (allows clean shutdown)
 
 
@@ -190,13 +188,11 @@ class Session:
             self._teardown(str(e))
 
     def _keepalive(self):
-        """Send periodic PINGs to detect dead connections.
+        """Send periodic PINGs — warn on missed PONGs but never disconnect.
 
-        A missed PONG no longer tears the session down: a slow Tor circuit
-        (or any transient latency) can delay a PONG well past any fixed
-        window without the peer actually being gone. We instead surface a
-        soft warning and let the connection persist until a real
-        disconnect (ConnectionError) or the hard IDLE_TIMEOUT ends it.
+        Over slow links (Tor, proxychains, etc.) a PONG can arrive well
+        after the 10 s window. We surface a soft warning but let the
+        session live until a real socket-level failure or user Ctrl+C.
         """
         missed = 0
         while self._alive.is_set():
@@ -206,7 +202,6 @@ class Session:
             self._pong_event.clear()
             self._outbound.put(Message(MsgType.PING, None))
             if not self._pong_event.wait(timeout=KEEPALIVE_TIMEOUT):
-                # Transient loss of liveness — warn, but keep the session.
                 missed += 1
                 try:
                     self._on_message(Message(
@@ -215,37 +210,12 @@ class Session:
                     ))
                 except Exception:
                     pass
-                # A sustained streak of missed PINGs with no recovery means
-                # the peer is genuinely gone; tear the session down.
-                if missed >= KEEPALIVE_MAX_MISSED:
-                    self._teardown(
-                        f"Peer unreachable — {missed} keepalives missed"
-                    )
-                    return
                 continue
             missed = 0
 
     def _watchdog(self):
-        """Hard timeout: terminate if session exceeds IDLE_TIMEOUT."""
-        deadline = time.monotonic() + IDLE_TIMEOUT
-        warned = False
-        while self._alive.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._teardown(
-                    f"Session expired after {IDLE_TIMEOUT // 60} minutes"
-                )
-                return
-            if not warned and remaining < 300:
-                warned = True
-                try:
-                    self._on_message(Message(
-                        MsgType.SYS,
-                        "⚠  Session expires in 5 minutes",
-                    ))
-                except Exception:
-                    pass
-            time.sleep(5)
+        """No-op: session runs until user quits with Ctrl+C."""
+        return
 
     # ── Internal teardown ─────────────────────────────────────────────────────
 

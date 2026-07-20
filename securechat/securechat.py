@@ -85,15 +85,14 @@ def run_host(port: int) -> None:
         _p(DIM + "  (share both with your guest)" + R)
 
     _p()
-    _p(DIM + "  Port: " + str(port) + "  |  Auto-timeout: 15 minutes" + R)
+    _p(DIM + "  Port: " + str(port) + "  |  Press Ctrl+C to stop waiting" + R)
     _p()
 
     def on_waiting(elapsed: int):
-        remaining = max(0, 900 - elapsed)
-        m, s = divmod(remaining, 60)
+        m, s = divmod(elapsed, 60)
         print(
             f"\r  {Y}Waiting for guest...{R}  "
-            f"{DIM}Time remaining: {m:02d}:{s:02d}{R}   ",
+            f"{DIM}elapsed: {m:02d}:{s:02d}{R}   ",
             end="", flush=True,
         )
 
@@ -104,11 +103,11 @@ def run_host(port: int) -> None:
             key=key,
             port=port,
             on_waiting=on_waiting,
-            timeout=900,
+            timeout=0,    # infinite — Ctrl+C to stop
         )
     except TimeoutError:
         _p("\n")
-        _p(RE + "  No guest connected within 15 minutes. Exiting." + R)
+        _p(RE + "  Connection window expired." + R)
         sys.exit(1)
     except ValueError as e:
         _p("\n")
@@ -167,10 +166,7 @@ def run_connect(port: int) -> None:
         sys.exit(1)
 
     _p()
-    if via_tor:
-        _p(Y + "  Routing through Tor — may take 15-30 seconds..." + R)
-    else:
-        _p(Y + "  Connecting to " + host_addr + "..." + R)
+    _p(Y + "  Connecting to " + host_addr + " — Press Ctrl+C to cancel" + R)
     _p()
 
     def on_status(msg: str):
@@ -178,20 +174,23 @@ def run_connect(port: int) -> None:
 
     key = crypto.derive_key(code)
 
+    # SECURECHAT_SLOW_NETWORK=1 is checked inside peer_connect for
+    # handshake/connect timeouts. The overall "wait forever" timeout
+    # here (0) means we never give up — user must Ctrl+C.
     try:
         conn = network.peer_connect(
             host_ip=host_addr,
             key=key,
             port=port,
             on_status=on_status,
-            timeout=900,
+            timeout=0,     # infinite — Ctrl+C to stop
             via_tor=via_tor,
         )
     except ValueError as e:
         _p("\n" + RE + "  Handshake failed: " + str(e) + R)
         sys.exit(1)
     except TimeoutError:
-        _p("\n" + RE + "  Timed out after 15 minutes." + R)
+        _p("\n" + RE + "  Connection window expired." + R)
         sys.exit(1)
     except Exception as e:
         _p("\n" + RE + "  Error: " + str(e) + R)
@@ -263,7 +262,7 @@ def _run_chat(
     tor_note = "  [via Tor]" if via_tor else ""
     ui.push_system(
         "Secure channel open" + tor_note
-        + " — AES-256-GCM — 15 min limit — /help for commands"
+        + " — AES-256-GCM — /help for commands — Ctrl+C to quit"
     )
     ui.push_system(
         "Send files: /sendfile <path>  |  saved to ~/securechat_received/"

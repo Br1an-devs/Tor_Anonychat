@@ -14,6 +14,7 @@ the handshake, so the very first byte exchanged is already encrypted.
 No plaintext ever travels the wire.
 """
 
+import os
 import socket
 import time
 import sys
@@ -80,7 +81,7 @@ def host_listen(
     try:
         while True:
             elapsed = int(time.monotonic() - start)
-            if elapsed >= timeout:
+            if timeout > 0 and elapsed >= timeout:
                 raise TimeoutError("No peer connected within the timeout window")
 
             if on_waiting:
@@ -92,7 +93,9 @@ def host_listen(
                 continue
 
             # Got a connection — authenticate
-            conn.settimeout(15)
+            # Use a generous handshake timeout so proxychains/Tor/relay
+            # users aren't cut off mid-handshake.
+            conn.settimeout(60)
             ok = protocol.perform_handshake_host(conn, key)
             if not ok:
                 conn.close()
@@ -143,11 +146,16 @@ def peer_connect(
     via_tor   : True when connecting to a .onion hidden service via torsocks;
                 uses a longer handshake timeout to account for Tor latency
     """
-    start = time.monotonic()
+    # When using proxychains, Tor, or any relay, TCP connect can take
+    # much longer than a direct LAN link. We default to generous values
+    # and let the user opt into even longer ones via env var.
+    _slow = os.environ.get("SECURECHAT_SLOW_NETWORK", "").strip() == "1"
 
-    # Tor circuits can take 10-30 s to establish; give the handshake more room
-    handshake_timeout = 60 if via_tor else 15
-    connect_timeout   = 30 if via_tor else 10
+    # Tor circuits can take 10-30+ s; handshake adds similar latency
+    handshake_timeout = 120 if (_slow or via_tor) else 30
+    connect_timeout   = 60  if (_slow or via_tor) else 20
+
+    start = time.monotonic()
 
     def _status(msg):
         if on_status:
@@ -155,7 +163,7 @@ def peer_connect(
 
     while True:
         elapsed = time.monotonic() - start
-        if elapsed >= timeout:
+        if timeout > 0 and elapsed >= timeout:
             raise TimeoutError("Could not connect within the timeout window")
 
         if via_tor:
