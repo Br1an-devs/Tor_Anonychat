@@ -15,7 +15,7 @@ Nonce12 bytes, random per message — NIST SP 800-38D.
 
 TransportTor hidden service — no IP address ever leaves either machine.
 
-Session codeOne-time use, 46-bit entropy, unambiguous Base32 alphabet.
+Session codeOne-time use, ~60-bit entropy (12 chars from a 32-symbol alphabet), unambiguous Base32 alphabet.
 
 LogsNone. No history. No files written to disk by the app.
 

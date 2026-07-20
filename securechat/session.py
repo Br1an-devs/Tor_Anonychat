@@ -35,6 +35,7 @@ log = logging.getLogger("securechat.session")
 
 KEEPALIVE_INTERVAL = 30     # seconds between PINGs
 KEEPALIVE_TIMEOUT  = 10     # seconds to wait for PONG
+KEEPALIVE_MAX_MISSED = 6     # sustained missed PINGs before declaring dead
 IDLE_TIMEOUT       = 900    # 15 minutes — session hard limit
 SOCK_TIMEOUT       = 5      # socket read timeout (allows clean shutdown)
 
@@ -69,7 +70,7 @@ class Session:
         self._on_message  = on_message
         self._on_close    = on_close
 
-        self._outbound    = queue.Queue(maxsize=256)
+        self._outbound    = queue.Queue(maxsize=4096)
         self._alive       = threading.Event()
         self._alive.set()
         self._close_once  = threading.Lock()
@@ -126,6 +127,11 @@ class Session:
 
     def _reader(self):
         """Receive messages from the remote peer."""
+        # Bounded tolerance for transient decryption failures (e.g. a single
+        # flipped bit on the wire). A sustained burst means the peer is gone
+        # or using the wrong key, at which point we tear down.
+        auth_failures = 0
+        MAX_AUTH_FAILURES = 5
         try:
             while self._alive.is_set():
                 try:
@@ -136,9 +142,20 @@ class Session:
                     self._teardown(f"Connection lost: {e}")
                     return
                 except Exception as e:
-                    self._teardown(f"Decryption error: {e}")
-                    return
+                    auth_failures += 1
+                    if auth_failures >= MAX_AUTH_FAILURES:
+                        self._teardown(f"Decryption error: {e}")
+                        return
+                    try:
+                        self._on_message(Message(
+                            MsgType.SYS,
+                            "⚠  Received a corrupted frame — retrying",
+                        ))
+                    except Exception:
+                        pass
+                    continue
 
+                auth_failures = 0
                 self._last_recv = time.monotonic()
 
                 if msg.mtype == MsgType.BYE:
@@ -173,7 +190,15 @@ class Session:
             self._teardown(str(e))
 
     def _keepalive(self):
-        """Send periodic PINGs to detect dead connections."""
+        """Send periodic PINGs to detect dead connections.
+
+        A missed PONG no longer tears the session down: a slow Tor circuit
+        (or any transient latency) can delay a PONG well past any fixed
+        window without the peer actually being gone. We instead surface a
+        soft warning and let the connection persist until a real
+        disconnect (ConnectionError) or the hard IDLE_TIMEOUT ends it.
+        """
+        missed = 0
         while self._alive.is_set():
             time.sleep(KEEPALIVE_INTERVAL)
             if not self._alive.is_set():
@@ -181,12 +206,29 @@ class Session:
             self._pong_event.clear()
             self._outbound.put(Message(MsgType.PING, None))
             if not self._pong_event.wait(timeout=KEEPALIVE_TIMEOUT):
-                self._teardown("Keepalive timeout — peer unreachable")
-                return
+                # Transient loss of liveness — warn, but keep the session.
+                missed += 1
+                try:
+                    self._on_message(Message(
+                        MsgType.SYS,
+                        f"⚠  Keepalive missed ({missed}) — peer may be slow/unreachable",
+                    ))
+                except Exception:
+                    pass
+                # A sustained streak of missed PINGs with no recovery means
+                # the peer is genuinely gone; tear the session down.
+                if missed >= KEEPALIVE_MAX_MISSED:
+                    self._teardown(
+                        f"Peer unreachable — {missed} keepalives missed"
+                    )
+                    return
+                continue
+            missed = 0
 
     def _watchdog(self):
         """Hard timeout: terminate if session exceeds IDLE_TIMEOUT."""
         deadline = time.monotonic() + IDLE_TIMEOUT
+        warned = False
         while self._alive.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -194,8 +236,8 @@ class Session:
                     f"Session expired after {IDLE_TIMEOUT // 60} minutes"
                 )
                 return
-            # Warn at 5 minutes remaining
-            if remaining < 300 and remaining > 295:
+            if not warned and remaining < 300:
+                warned = True
                 try:
                     self._on_message(Message(
                         MsgType.SYS,

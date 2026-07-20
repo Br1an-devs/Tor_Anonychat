@@ -44,13 +44,14 @@ class ChatUI:
         you_label: str = "You",
         peer_label: str = "Peer",
         via_tor: bool = False,
+        ft=None,
     ):
         self._session     = session
         self._role        = role
         self._peer_label  = peer_label
         self._via_tor     = via_tor
         self._you_label   = you_label
-
+        self._ft          = ft   # optional FileTransferChannel
         self._messages: deque = deque(maxlen=MAX_HISTORY)
         self._msg_lock  = threading.Lock()
         self._scroll    = 0           # lines scrolled up from bottom
@@ -171,28 +172,75 @@ class ChatUI:
         self._input_buf.clear()
         self._cursor = 0
 
-        if text.lower() in ("/quit", "/exit", "/q"):
+        low = text.lower()
+
+        if low in ("/quit", "/exit", "/q"):
             return "quit"
 
-        if text.lower() == "/help":
+        if low == "/help":
             self.push_system(
                 "Commands: /quit  /clear  /help  |  ↑↓ scroll  |  Ctrl-W clear input"
             )
+            self.push_system(
+                "File transfer: /sendfile <path>   /accept   /reject"
+            )
+            self.push_system(
+                "Received files → ~/securechat_received/"
+            )
             return None
 
-        if text.lower() == "/clear":
+        if low == "/clear":
             with self._msg_lock:
                 self._messages.clear()
             self._scroll = 0
             self._dirty.set()
             return None
 
+        # ── File transfer commands ────────────────────────────────────────────
+        if low.startswith("/sendfile"):
+            if self._ft is None:
+                self.push_system("File transfer is unavailable.")
+                return None
+            parts = text.split(None, 1)
+            if len(parts) < 2 or not parts[1].strip():
+                self.push_system(
+                    "Usage: /sendfile <path>  e.g. /sendfile ~/docs/report.pdf"
+                )
+                return None
+            if not self._session.is_alive:
+                self.push_system("Session is closed — cannot send files.")
+                return None
+            self._ft.send_file(parts[1].strip())
+            return None
+
+        if low in ("/accept", "/accept file"):
+            if self._ft is None:
+                self.push_system("File transfer is unavailable.")
+                return None
+            if not self._ft.has_pending_offer():
+                self.push_system("No pending file offer to accept.")
+                return None
+            self._ft.accept_offer()
+            return None
+
+        if low.startswith("/reject"):
+            if self._ft is None:
+                self.push_system("File transfer is unavailable.")
+                return None
+            if not self._ft.has_pending_offer():
+                self.push_system("No pending file offer to reject.")
+                return None
+            parts  = text.split(None, 1)
+            reason = parts[1].strip() if len(parts) > 1 else "declined"
+            self._ft.reject_offer(reason)
+            return None
+
         # Regular chat message
         if self._session.is_alive:
             try:
                 self._session.send_text(text)
-                # Echo locally as "You"
-                self.push_message(Message(MsgType.MSG, text, time.time()))
+                # Echo locally as "You" (sentinel marks it outgoing)
+                self.push_message(make_outgoing_msg(text))
             except Exception as e:
                 self.push_system(f"Send error: {e}")
         else:

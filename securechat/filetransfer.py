@@ -10,7 +10,7 @@ Design
     a direct sock.sendall() from a file-transfer thread would interleave bytes
     with the session's _writer thread.
   • Every 32 KB chunk is independently AES-256-GCM encrypted by the session
-    layer (frames pass through session.send_text → _patched_send → protocol).
+    layer (frames pass through session.send_text → protocol).
   • File-transfer frames are normal MSG frames whose JSON body starts with
     '{"ft":'. The FileTransferChannel intercepts them before the chat UI sees
     them, so the UI stays clean.
@@ -26,7 +26,7 @@ Wire messages (all carried as MSG body JSON):
   ACK    {ft}
   ERROR  {ft, reason}
 
-User commands (handled in securechat.py _handle_enter):
+User commands (handled in ui.py ChatUI._handle_enter):
   /sendfile <path>
   /accept
   /reject [reason]
@@ -36,6 +36,7 @@ import os
 import math
 import json
 import time
+import queue
 import hashlib
 import base64
 import threading
@@ -70,7 +71,7 @@ def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n //= 1024
+        n /= 1024.0
     return f"{n:.1f} TB"
 
 
@@ -454,10 +455,18 @@ class FileTransferChannel:
         """
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         msg  = Message(mtype=MsgType.MSG, body=body)
-        try:
-            self._session._outbound.put_nowait(msg)
-        except Exception as e:
-            self._push(f"FT queue error: {e}")
+        for attempt in range(3):
+            try:
+                self._session._outbound.put_nowait(msg)
+                return
+            except queue.Full:
+                if attempt < 2:
+                    time.sleep(0.1)
+                    continue
+                self._push("FT queue full — dropping frame")
+            except Exception as e:
+                self._push(f"FT queue error: {e}")
+                return
 
     # ── Response wait helpers ─────────────────────────────────────────────────
 

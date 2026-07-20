@@ -55,7 +55,8 @@ def generate_session_code() -> str:
     """
     Generate a cryptographically random session code.
     Format: XXXX-XXXX-XXXX  (Base32 subset — unambiguous characters)
-    Entropy: ~46 bits (sufficient for a single-use one-time code with 15-min window)
+    Entropy: ~60 bits (12 chars from a 32-symbol alphabet; sufficient for a
+    single-use one-time code with a 15-min window)
     """
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no I/O/1/0 confusion
     def segment(n=4):

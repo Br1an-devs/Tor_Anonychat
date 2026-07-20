@@ -18,7 +18,6 @@ import socket
 import time
 import sys
 
-from . import crypto
 from . import protocol
 
 
@@ -44,7 +43,7 @@ def get_local_ip() -> str:
 # ── Host ─────────────────────────────────────────────────────────────────────
 
 def host_listen(
-    code: str,
+    key: bytes,
     port: int = DEFAULT_PORT,
     on_waiting: callable = None,
     timeout: int = 900,
@@ -56,12 +55,11 @@ def host_listen(
 
     Parameters
     ----------
-    code       : session code (used to derive the AES key)
+    key        : 32-byte AES-256 session key (from crypto.derive_key)
     port       : TCP port to bind
     on_waiting : optional callback(seconds_elapsed) called every second while waiting
     timeout    : seconds before giving up
     """
-    key = crypto.derive_key(code)
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -98,10 +96,22 @@ def host_listen(
             ok = protocol.perform_handshake_host(conn, key)
             if not ok:
                 conn.close()
-                # Keep listening — could be a probe or wrong code attempt
-                continue
+                # Wrong code / probe — don't keep listening for a *new* guest.
+                # The session code is one-time; once a handshake fails we stop
+                # accepting so a dropped session can't be silently swapped for
+                # a different peer. Raise so the host returns to the menu.
+                #
+                # The brief sleep also throttles automated code-guessing:
+                # each wrong attempt costs the attacker this much wall-clock,
+                # making brute force of the ~60-bit code impractical.
+                time.sleep(2)
+                raise ValueError(
+                    "Handshake rejected — wrong session code, or host rejected "
+                    "the connection."
+                )
 
-            # Handshake passed
+            # Handshake passed — stop accepting any further connections.
+            srv.close()
             conn.settimeout(None)   # session module sets its own timeout
             return conn
 
@@ -113,7 +123,7 @@ def host_listen(
 
 def peer_connect(
     host_ip: str,
-    code: str,
+    key: bytes,
     port: int = DEFAULT_PORT,
     on_status: callable = None,
     timeout: int = 900,
@@ -126,14 +136,13 @@ def peer_connect(
     Parameters
     ----------
     host_ip   : IP address or .onion hostname of the host
-    code      : session code (must match host's code)
+    key       : 32-byte AES-256 session key (from crypto.derive_key)
     port      : TCP port of the host
     on_status : optional callback(message: str) for status updates
     timeout   : seconds before giving up
     via_tor   : True when connecting to a .onion hidden service via torsocks;
                 uses a longer handshake timeout to account for Tor latency
     """
-    key   = crypto.derive_key(code)
     start = time.monotonic()
 
     # Tor circuits can take 10-30 s to establish; give the handshake more room
