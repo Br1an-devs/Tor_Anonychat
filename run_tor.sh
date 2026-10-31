@@ -315,8 +315,11 @@ print(generate_session_code())
     printf "%b\n" " |                                                            |"
     printf "%b\n" " +------------------------------------------------------------+${RST}"
     printf "\n"
-    p "${YEL} Waiting for guest... (Ctrl+C to cancel)${RST}"
+    p "${DIM} Copy the details above, then press Enter to open the room and wait for your guest.${RST}"
+    p "${DIM} Tip: once in chat, type /roominfo to see these details again at any time.${RST}"
     printf "\n"
+    printf " Press Enter to open the room... "
+    read -r _
 
     export SECURECHAT_TOR_MODE=1
     export SECURECHAT_SESSION_CODE="$SESSION_CODE"
@@ -383,33 +386,36 @@ connect_mode() {
     # ─────────────────────────────────────────────────────────────────────────
 
     local MAX_ATTEMPTS=3
-    # NOTE: Do NOT wrap the Python process with the `timeout` command.
-    # The connection+handshake can take 30-90 s over Tor, and the chat
-    # session itself runs up to 15 minutes — both phases live in the same
-    # Python process.  Python's own watchdog thread enforces the 15-min
-    # hard limit, so a shell-level timeout would race against the curses UI
-    # and kill the process (via SIGTERM) while the screen is active,
-    # leaving the terminal in raw curses mode.
+    local CONNECT_TIMEOUT=90   # seconds allowed for Tor circuit + handshake
     local attempt=1
     local session_ran=0        # did we ever get past the handshake?
 
     while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
         printf "\n"
-        p "${YEL} Connecting... (attempt ${attempt}/${MAX_ATTEMPTS})${RST}"
-        p "${DIM} Tor circuits can take 15-90s to build. Please wait.${RST}"
+        p "${YEL} Connecting... (attempt ${attempt}/${MAX_ATTEMPTS}, up to ${CONNECT_TIMEOUT}s)${RST}"
+        p "${DIM} Tor circuits can take 15-30s to build. Please wait.${RST}"
         printf "\n"
 
-        # Python manages its own 15-minute session limit internally.
-        torsocks python3 -m securechat connect --port 57311
+        # timeout wraps only the initial connection attempt.
+        # Python's own timeout=900 (15 min) controls the session duration.
+        timeout "$CONNECT_TIMEOUT" \
+            torsocks python3 -m securechat connect --port 57311
         local EXIT_CODE=$?
 
-        # User quit cleanly or session ended normally (15-min watchdog, /quit)
+        # User quit cleanly or session ended normally
         if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 130 ]; then
             session_ran=1
             break
         fi
 
-        p "${YEL}[!] Connection failed (exit ${EXIT_CODE}).${RST}"
+        # Connection timed out before handshake completed
+        if [ "$EXIT_CODE" -eq 124 ]; then
+            p "${YEL}[!] Timed out after ${CONNECT_TIMEOUT}s — host may not be ready.${RST}"
+        else
+            # Any other non-zero: could be mid-session crash if we got through
+            # once (session_ran=1). For now treat all as pre-connect failure.
+            p "${YEL}[!] Connection failed (exit ${EXIT_CODE}).${RST}"
+        fi
 
         if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
             p "${DIM} Retrying in 5 seconds...${RST}"
@@ -428,7 +434,7 @@ connect_mode() {
 
     # If we got into a session but crashed mid-chat, offer one reconnect
     if [ "$session_ran" -eq 0 ] && [ "${EXIT_CODE:-0}" -ne 0 ] \
-        && [ "${EXIT_CODE:-0}" -ne 130 ]; then
+        && [ "${EXIT_CODE:-0}" -ne 130 ] && [ "${EXIT_CODE:-0}" -ne 124 ]; then
         printf "\n"
         p "${YEL}[!] Session dropped. Reconnecting once...${RST}"
         sleep 3
