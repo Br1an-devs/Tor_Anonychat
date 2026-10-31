@@ -93,7 +93,7 @@ def run_host(port: int) -> None:
 
     try:
         conn = network.host_listen(
-            code=code,
+            key=crypto.derive_key(code),
             port=port,
             on_waiting=on_waiting,
             timeout=900,
@@ -154,6 +154,14 @@ def run_connect(port: int) -> None:
         _p(RE + "  No session code entered. Exiting." + R)
         sys.exit(1)
 
+    env_nick = os.environ.get("SECURECHAT_NICKNAME", "").strip()
+    if env_nick:
+        nickname = env_nick[:20]
+        _p(G + "  Nickname : " + CB + nickname + R)
+    else:
+        raw_nick = input(G + "  Your nickname (max 20 chars): " + R).strip()[:20]
+        nickname  = raw_nick if raw_nick else "Guest"
+
     _p()
     if via_tor:
         _p(Y + "  Routing through Tor — may take 15-30 seconds..." + R)
@@ -167,7 +175,8 @@ def run_connect(port: int) -> None:
     try:
         conn = network.peer_connect(
             host_ip=host_addr,
-            code=code,
+            key=crypto.derive_key(code),
+            nickname=nickname,
             port=port,
             on_status=on_status,
             timeout=900,
@@ -192,7 +201,7 @@ def run_connect(port: int) -> None:
         conn=conn,
         key=crypto.derive_key(code),
         role="guest",
-        you_label="You (Guest)",
+        you_label=f"You ({nickname})",
         peer_label="Host",
         via_tor=via_tor,
     )
