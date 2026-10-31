@@ -3,11 +3,12 @@ securechat/network.py
 ─────────────────────
 TCP socket management for host (listener) and peer (connector).
 
-  Host   : binds to 0.0.0.0:PORT, waits for exactly one connection,
-           performs the encrypted handshake, returns the socket.
+  Host   : binds to 0.0.0.0:PORT, accepts multiple connections up to MAX_USERS,
+           performs the encrypted handshake for each, then holds them in a
+           pending queue waiting for host approval.
 
   Peer   : connects to HOST:PORT, performs the encrypted handshake,
-           returns the socket.
+           sends JOIN request with nickname, then waits for ADMIT or DENY.
 
 Both sides derive the AES-256 key from the session code before
 the handshake, so the very first byte exchanged is already encrypted.
@@ -20,11 +21,12 @@ import time
 import sys
 
 from . import protocol
+from .protocol import Message, MsgType, send_msg, recv_msg
 
 
 DEFAULT_PORT  = 57311     # Unlikely to be in use; well above 1024
 CONNECT_RETRY = 3         # seconds between connection retries
-BACKLOG       = 1         # only one peer allowed
+MAX_USERS     = 10        # hard ceiling on simultaneous participants
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,18 +52,9 @@ def host_listen(
     timeout: int = 900,
 ) -> socket.socket:
     """
-    Bind and listen for exactly one incoming connection.
-    Performs the encrypted handshake.
-    Returns the authenticated socket, or raises on failure/timeout.
-
-    Parameters
-    ----------
-    key        : 32-byte AES-256 session key (from crypto.derive_key)
-    port       : TCP port to bind
-    on_waiting : optional callback(seconds_elapsed) called every second while waiting
-    timeout    : seconds before giving up
+    Bind and listen for exactly one incoming connection (legacy 2-user path).
+    Kept for backward compat; not used in multi-user mode.
     """
-
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -72,8 +65,8 @@ def host_listen(
             f"Try a different port with --port, or free the port."
         ) from e
 
-    srv.listen(BACKLOG)
-    srv.settimeout(1.0)    # 1-second accept timeout so we can count elapsed time
+    srv.listen(1)
+    srv.settimeout(1.0)
 
     start   = time.monotonic()
     elapsed = 0
@@ -92,34 +85,118 @@ def host_listen(
             except socket.timeout:
                 continue
 
-            # Got a connection — authenticate
-            # Use a generous handshake timeout so proxychains/Tor/relay
-            # users aren't cut off mid-handshake.
             conn.settimeout(60)
             ok = protocol.perform_handshake_host(conn, key)
             if not ok:
                 conn.close()
-                # Wrong code / probe — don't keep listening for a *new* guest.
-                # The session code is one-time; once a handshake fails we stop
-                # accepting so a dropped session can't be silently swapped for
-                # a different peer. Raise so the host returns to the menu.
-                #
-                # The brief sleep also throttles automated code-guessing:
-                # each wrong attempt costs the attacker this much wall-clock,
-                # making brute force of the ~60-bit code impractical.
                 time.sleep(2)
                 raise ValueError(
                     "Handshake rejected — wrong session code, or host rejected "
                     "the connection."
                 )
 
-            # Handshake passed — stop accepting any further connections.
             srv.close()
-            conn.settimeout(None)   # session module sets its own timeout
+            conn.settimeout(None)
             return conn
 
     finally:
-        srv.close()
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+
+def host_start_listener(
+    key: bytes,
+    port: int = DEFAULT_PORT,
+) -> socket.socket:
+    """
+    Create and bind the server socket for multi-user mode.
+    Returns the listening server socket (not yet accepting).
+    Caller owns the lifecycle; call .close() when done.
+    """
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind(("0.0.0.0", port))
+    except OSError as e:
+        raise OSError(
+            f"Cannot bind to port {port}: {e}\n"
+            f"Try a different port with --port, or free the port."
+        ) from e
+    srv.listen(MAX_USERS)
+    srv.settimeout(1.0)
+    return srv
+
+
+def accept_one_guest(
+    srv: socket.socket,
+    key: bytes,
+) -> tuple:
+    """
+    Accept a single new TCP connection, perform handshake, read JOIN message.
+    Returns (conn, nickname) on success, or (None, None) on failure/timeout.
+    Does NOT block the caller for more than ~2 s (handshake timeout is generous
+    but the srv socket already has a 1 s accept timeout).
+
+    The JOIN flow:
+      guest → HELLO  (handshake)
+      host  → CONFIRM
+      guest → MSG{JOIN, nickname}
+      [host will later send ADMIT or DENY via the connection]
+    """
+    try:
+        conn, addr = srv.accept()
+    except socket.timeout:
+        return None, None
+    except Exception:
+        return None, None
+
+    conn.settimeout(30)
+    try:
+        ok = protocol.perform_handshake_host(conn, key)
+        if not ok:
+            conn.close()
+            return None, None
+
+        # Read the JOIN message to get the requested nickname
+        msg = recv_msg(conn, key)
+        if msg.mtype != MsgType.JOIN or not msg.body:
+            conn.close()
+            return None, None
+
+        nickname = msg.body.strip()[:20]  # cap at 20 chars
+        if not nickname:
+            conn.close()
+            return None, None
+
+        conn.settimeout(None)
+        return conn, nickname
+
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None, None
+
+
+def admit_guest(conn: socket.socket, key: bytes, room_info: str) -> None:
+    """Send ADMIT to a pending guest socket."""
+    send_msg(conn, Message(MsgType.ADMIT, room_info), key)
+
+
+def deny_guest(conn: socket.socket, key: bytes, reason: str = "Request denied by host") -> None:
+    """Send DENY to a pending guest socket and close it."""
+    try:
+        send_msg(conn, Message(MsgType.DENY, reason), key)
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ── Peer ─────────────────────────────────────────────────────────────────────
@@ -127,33 +204,37 @@ def host_listen(
 def peer_connect(
     host_ip: str,
     key: bytes,
+    nickname: str,
     port: int = DEFAULT_PORT,
     on_status: callable = None,
     timeout: int = 900,
     via_tor: bool = False,
 ) -> socket.socket:
     """
-    Connect to the host and perform the encrypted handshake.
-    Returns the authenticated socket, or raises on failure/timeout.
+    Connect to the host, perform the encrypted handshake, send JOIN request,
+    and wait for ADMIT or DENY.
+
+    Returns the authenticated socket on ADMIT, or raises:
+      - ValueError  if handshake fails or host sends DENY
+      - TimeoutError if the overall timeout is exceeded
 
     Parameters
     ----------
     host_ip   : IP address or .onion hostname of the host
     key       : 32-byte AES-256 session key (from crypto.derive_key)
+    nickname  : the display name this peer wants to use
     port      : TCP port of the host
     on_status : optional callback(message: str) for status updates
     timeout   : seconds before giving up
-    via_tor   : True when connecting to a .onion hidden service via torsocks;
-                uses a longer handshake timeout to account for Tor latency
+    via_tor   : True when connecting via torsocks
     """
-    # When using proxychains, Tor, or any relay, TCP connect can take
-    # much longer than a direct LAN link. We default to generous values
-    # and let the user opt into even longer ones via env var.
     _slow = os.environ.get("SECURECHAT_SLOW_NETWORK", "").strip() == "1"
-
-    # Tor circuits can take 10-30+ s; handshake adds similar latency
     handshake_timeout = 120 if (_slow or via_tor) else 30
     connect_timeout   = 60  if (_slow or via_tor) else 20
+
+    # Admission can take a long time if the host is slow to respond —
+    # give it up to 10 minutes while we poll for ADMIT/DENY.
+    admit_timeout = 600
 
     start = time.monotonic()
 
@@ -191,6 +272,36 @@ def peer_connect(
                 "Handshake failed — wrong session code, or host rejected the connection."
             )
 
-        conn.settimeout(None)
-        _status("Authenticated!")
-        return conn
+        # Send JOIN request with chosen nickname
+        _status(f"Sending join request as '{nickname}'...")
+        try:
+            send_msg(conn, Message(MsgType.JOIN, nickname), key)
+        except Exception as e:
+            conn.close()
+            raise ValueError(f"Failed to send join request: {e}") from e
+
+        # Wait for ADMIT or DENY — this blocks until host decides
+        _status("Waiting for host to accept your request...")
+        conn.settimeout(admit_timeout)
+        try:
+            reply = recv_msg(conn, key)
+        except socket.timeout:
+            conn.close()
+            raise TimeoutError("Host did not respond to join request in time.")
+        except Exception as e:
+            conn.close()
+            raise ValueError(f"Connection lost while waiting for admission: {e}") from e
+
+        if reply.mtype == MsgType.ADMIT:
+            conn.settimeout(None)
+            _status("Admitted to room!")
+            return conn
+
+        elif reply.mtype == MsgType.DENY:
+            conn.close()
+            reason = reply.body or "No reason given"
+            raise ValueError(f"Join request denied: {reason}")
+
+        else:
+            conn.close()
+            raise ValueError(f"Unexpected message from host during join: {reply.mtype}")

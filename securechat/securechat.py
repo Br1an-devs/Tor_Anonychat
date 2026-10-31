@@ -5,30 +5,40 @@ securechat/securechat.py  —  Main launcher
 Entry point: bash run_tor.sh
 
 Direct usage:
-  python3 -m securechat host     [--port N]
-  python3 -m securechat connect  [--port N]
+  python3 -m securechat host     [--port N] [--nick NAME]
+  python3 -m securechat connect  [--port N] [--nick NAME]
   python3 -m securechat          (interactive menu)
+
+Multi-user group chat
+─────────────────────
+• Host starts the room.  Guests are HELD in a waiting lobby until the
+  host types /admit <nick> in the chat UI.  The host can also /deny
+  or /kick at any time.
+• Guests see a "Waiting for host to accept…" spinner until admitted or
+  denied.  Once admitted they join a live group chat where every
+  message is broadcast to everyone.
+• Up to 10 simultaneous participants (1 host + 9 guests).  Adjustable
+  via MAX_USERS in network.py.
 """
 
 import sys
 import os
 import argparse
 import time
+import threading
 import signal
 
-# Silence shell history
 os.environ["HISTFILE"]     = "/dev/null"
 os.environ["HISTSIZE"]     = "0"
 os.environ["HISTFILESIZE"] = "0"
 
 from . import crypto, network, protocol
-from .session import Session
+from .session import Session, GroupSession
 from .protocol import Message, MsgType
 from .ui import ChatUI
 from .network import DEFAULT_PORT, get_local_ip
 from .filetransfer import FileTransferChannel
 
-# ANSI helpers (pre-curses phase only)
 G   = "\033[0;32m"
 GB  = "\033[1;32m"
 Y   = "\033[1;33m"
@@ -48,7 +58,6 @@ def is_onion(addr: str) -> bool:
 
 
 def clear():
-    """Clear the screen, restoring the terminal first if curses left it raw."""
     try:
         import curses as _curses
         _curses.endwin()
@@ -58,18 +67,19 @@ def clear():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  HOST MODE
+#  HOST MODE  — multi-user group room
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_host(port: int) -> None:
+def run_host(port: int, host_nick: str) -> None:
     tor_mode   = os.environ.get("SECURECHAT_TOR_MODE", "").strip() == "1"
     ext_code   = os.environ.get("SECURECHAT_SESSION_CODE", "").strip()
     onion_addr = os.environ.get("ONION", "").strip()
 
     code = ext_code if ext_code else crypto.generate_session_code()
+    key  = crypto.derive_key(code)
 
     clear()
-    _p(GB + "  SecureChat — Waiting for guest" + R)
+    _p(GB + "  SecureChat — Group Room (Host)" + R)
     _p(DIM + "  ─────────────────────────────────────────────────" + R)
     _p()
 
@@ -77,74 +87,117 @@ def run_host(port: int) -> None:
         _p(G  + "  Onion : " + CB + onion_addr + R)
         _p(G  + "  Code  : " + CB + code + R)
         _p()
-        _p(DIM + "  (send both to your guest over a secure channel)" + R)
+        _p(DIM + "  (send both to guests over a secure channel)" + R)
     else:
         _p(G  + "  Your IP : " + CB + get_local_ip() + R)
         _p(G  + "  Code    : " + CB + code + R)
         _p()
-        _p(DIM + "  (share both with your guest)" + R)
+        _p(DIM + "  (share both with your guests)" + R)
 
     _p()
-    _p(DIM + "  Port: " + str(port) + "  |  Press Ctrl+C to stop waiting" + R)
+    _p(DIM + f"  Host nickname : {CB}{host_nick}{R}")
+    _p(DIM + "  Port: " + str(port) + "  |  Press Ctrl+C to stop" + R)
+    _p()
+    _p(Y + "  Waiting for guests to connect…" + R)
+    _p(DIM + "  Guests will be held in a lobby until you /admit them." + R)
     _p()
 
-    def on_waiting(elapsed: int):
-        m, s = divmod(elapsed, 60)
-        print(
-            f"\r  {Y}Waiting for guest...{R}  "
-            f"{DIM}elapsed: {m:02d}:{s:02d}{R}   ",
-            end="", flush=True,
-        )
-
-    key = crypto.derive_key(code)
-
+    # Open the TCP listener
     try:
-        conn = network.host_listen(
-            key=key,
-            port=port,
-            on_waiting=on_waiting,
-            timeout=0,    # infinite — Ctrl+C to stop
-        )
-    except TimeoutError:
-        _p("\n")
-        _p(RE + "  Connection window expired." + R)
-        sys.exit(1)
-    except ValueError as e:
-        _p("\n")
-        _p(RE + f"  Handshake failed: {e}" + R)
-        sys.exit(1)
+        srv = network.host_start_listener(key, port)
     except OSError as e:
-        _p("\n")
         _p(RE + f"  Error: {e}" + R)
         sys.exit(1)
 
-    _p("\n")
-    _p(GB + "  Guest connected and authenticated!" + R)
+    _p(GB + "  Listening — press Enter to open chat panel now" + R)
     _p()
-    time.sleep(0.6)
+    time.sleep(1.0)
 
-    _run_chat(
-        conn=conn,
-        key=key,
+    # ── Set up the GroupSession and UI ──────────────────────────────────────
+
+    ui = ChatUI(
+        session=None,    # filled below
         role="host",
-        you_label="You (Host)",
+        you_label=f"{host_nick} (host)",
         peer_label="Guest",
         via_tor=tor_mode,
+        is_group=True,
+        host_nickname=host_nick,
     )
+
+    def on_group_message(msg: Message, from_nick: str):
+        ui.push_message(msg)
+
+    def on_group_close(reason: str):
+        ui.push_system("Room closed: " + reason)
+        ui.signal_closed(reason)
+
+    def on_join_request(nickname: str):
+        ui.add_pending_request(nickname)
+
+    group = GroupSession(
+        key=key,
+        host_nickname=host_nick,
+        on_message=on_group_message,
+        on_close=on_group_close,
+        on_join_request=on_join_request,
+    )
+    ui._session = group
+
+    # ── Background thread: accept new TCP connections continuously ──────────
+
+    def _acceptor():
+        """Accept guests in the background until the group session closes."""
+        while group.is_alive:
+            conn, nickname = network.accept_one_guest(srv, key)
+            if conn is None:
+                continue   # timeout — keep looping
+            # Register as pending; host must /admit
+            final_nick = group.add_pending(conn, nickname)
+            # (UI notification is done inside add_pending via on_join_request)
+
+    acceptor_thread = threading.Thread(target=_acceptor, daemon=True)
+    acceptor_thread.start()
+
+    # ── Start the session and UI ────────────────────────────────────────────
+
+    group.start()
+
+    group_info = (
+        f"Group room open — AES-256-GCM"
+        + (" [via Tor]" if tor_mode else "")
+        + " — /help for commands — Ctrl+C to quit"
+    )
+    ui.push_system(group_info)
+    ui.push_system(
+        "Guests will appear in the 🔔 bar — type /admit <nick> to let them in"
+    )
+
+    try:
+        ui.run()
+    finally:
+        try:
+            srv.close()
+        except Exception:
+            pass
+        group.close("Host ended the session")
+        group.join()
+        _wipe_and_exit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONNECT (GUEST) MODE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_connect(port: int) -> None:
+def run_connect(port: int, guest_nick: str) -> None:
     clear()
-    _p(GB + "  SecureChat — Connect to Host" + R)
+    _p(GB + "  SecureChat — Connect to Group Room" + R)
     _p(DIM + "  ─────────────────────────────────────────────────" + R)
     _p()
 
     env_host = os.environ.get("SECURECHAT_PEER_HOST", "").strip()
     env_code = os.environ.get("SECURECHAT_PEER_CODE", "").strip()
+    env_nick = os.environ.get("SECURECHAT_NICKNAME", "").strip()
 
     if env_host:
         host_addr = env_host
@@ -165,6 +218,18 @@ def run_connect(port: int) -> None:
         _p(RE + "  No session code entered. Exiting." + R)
         sys.exit(1)
 
+    # Determine nickname
+    if env_nick:
+        nickname = env_nick
+    elif guest_nick:
+        nickname = guest_nick
+    else:
+        nickname = input(G + "  Your nickname (leave blank for 'Guest'): " + R).strip()
+        if not nickname:
+            nickname = "Guest"
+
+    nickname = nickname[:20]   # server also caps at 20; be consistent
+
     _p()
     _p(Y + "  Connecting to " + host_addr + " — Press Ctrl+C to cancel" + R)
     _p()
@@ -174,20 +239,18 @@ def run_connect(port: int) -> None:
 
     key = crypto.derive_key(code)
 
-    # SECURECHAT_SLOW_NETWORK=1 is checked inside peer_connect for
-    # handshake/connect timeouts. The overall "wait forever" timeout
-    # here (0) means we never give up — user must Ctrl+C.
     try:
         conn = network.peer_connect(
             host_ip=host_addr,
             key=key,
+            nickname=nickname,
             port=port,
             on_status=on_status,
-            timeout=0,     # infinite — Ctrl+C to stop
+            timeout=0,      # infinite — Ctrl+C to stop
             via_tor=via_tor,
         )
     except ValueError as e:
-        _p("\n" + RE + "  Handshake failed: " + str(e) + R)
+        _p("\n" + RE + "  " + str(e) + R)
         sys.exit(1)
     except TimeoutError:
         _p("\n" + RE + "  Connection window expired." + R)
@@ -197,39 +260,37 @@ def run_connect(port: int) -> None:
         sys.exit(1)
 
     _p()
-    _p(GB + "  Connected and authenticated!" + R)
+    _p(GB + "  Admitted to room!" + R)
     _p()
     time.sleep(0.6)
 
-    _run_chat(
+    _run_guest_chat(
         conn=conn,
         key=key,
-        role="guest",
-        you_label="You (Guest)",
-        peer_label="Host",
+        nickname=nickname,
         via_tor=via_tor,
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  SHARED: start Session + ChatUI + FileTransferChannel
+#  SHARED: start Session + ChatUI for guests
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_chat(
+def _run_guest_chat(
     conn,
     key: bytes,
-    role: str,
-    you_label: str,
-    peer_label: str,
+    nickname: str,
     via_tor: bool = False,
 ) -> None:
 
     ui = ChatUI(
         session=None,
-        role=role,
-        you_label=you_label,
-        peer_label=peer_label,
+        role="guest",
+        you_label=nickname,
+        peer_label="Room",
         via_tor=via_tor,
+        is_group=True,      # guest also shows group-mode UI
+        host_nickname=None,
     )
 
     def on_message(msg: Message):
@@ -242,36 +303,39 @@ def _run_chat(
     session = Session(
         sock=conn,
         key=key,
-        role=role,
+        role="guest",
         on_message=on_message,
         on_close=on_close,
     )
+
+    # Override send_text to stamp the sender field so the host can relay it
+    _orig_send = session.send_text
+    def _send_with_nick(text: str, sender: str = None):
+        from .protocol import Message as _Msg, MsgType as _MT
+        import queue as _q
+        if not session._alive.is_set():
+            from .session import SessionClosedError
+            raise SessionClosedError("Session is closed")
+        msg = _Msg(mtype=_MT.MSG, body=text, sender=nickname)
+        session._outbound.put(msg)
+    session.send_text = _send_with_nick
+
     ui._session = session
 
-    # ── File transfer channel ─────────────────────────────────────────────────
-    ft = FileTransferChannel(
-        session=session,
-        key=key,
-        push_system=ui.push_system,
-    )
-    ft.install()
-    ui._ft = ft
+    # File transfer not supported in group mode (would need addressing layer)
+    # — omitted intentionally; the socket is shared/hub-based.
 
-    # ── Start everything ──────────────────────────────────────────────────────
     session.start()
     tor_note = "  [via Tor]" if via_tor else ""
     ui.push_system(
-        "Secure channel open" + tor_note
+        f"Joined as '{nickname}'" + tor_note
         + " — AES-256-GCM — /help for commands — Ctrl+C to quit"
-    )
-    ui.push_system(
-        "Send files: /sendfile <path>  |  saved to ~/securechat_received/"
     )
 
     try:
         ui.run()
     finally:
-        session.close("UI closed")
+        session.close("Guest quit")
         session.join()
         _wipe_and_exit()
 
@@ -289,24 +353,27 @@ def _wipe_and_exit() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  INTERACTIVE MENU  (direct invocation without run_tor.sh)
+#  INTERACTIVE MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def interactive_menu(port: int) -> None:
     clear()
     _p()
-    _p(CB + "  SecureChat  —  Ephemeral Encrypted Terminal Chat" + R)
-    _p(DIM + "  AES-256-GCM  |  One-time code  |  Zero logs" + R)
+    _p(CB + "  SecureChat  —  Ephemeral Encrypted Group Chat" + R)
+    _p(DIM + "  AES-256-GCM  |  One-time code  |  Zero logs  |  Multi-user" + R)
     _p()
-    _p(G + "  [1]" + R + "  Host a session   (generate code, wait for guest)")
-    _p(G + "  [2]" + R + "  Join a session   (enter host address + code)")
+    _p(G + "  [1]" + R + "  Host a room   (generate code, approve guests)")
+    _p(G + "  [2]" + R + "  Join a room   (enter host address + code + nickname)")
     _p(G + "  [3]" + R + "  Exit")
     _p()
     choice = input("  Choice [1/2/3]: ").strip()
     if choice == "1":
-        run_host(port)
+        nick = input(G + "  Your host nickname (leave blank for 'Host'): " + R).strip()
+        if not nick:
+            nick = "Host"
+        run_host(port, nick)
     elif choice == "2":
-        run_connect(port)
+        run_connect(port, "")
     else:
         clear()
         sys.exit(0)
@@ -329,23 +396,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="securechat")
     parser.add_argument(
         "mode", nargs="?", choices=["host", "connect"],
-        help="host = start session | connect = join session",
+        help="host = start room | connect = join room",
     )
     parser.add_argument(
         "--port", "-p", type=int, default=DEFAULT_PORT,
         help=f"TCP port (default: {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--nick", "-n", type=str, default="",
+        help="Your display nickname (default: 'Host' or 'Guest')",
     )
     args = parser.parse_args()
 
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     except AttributeError:
-        pass  # Windows
+        pass
 
-    # Ensure curses always restores the terminal even when killed externally
-    # (e.g. by a shell `timeout` command or a process manager sending SIGTERM).
-    # Without this, SIGTERM bypasses curses.wrapper's finally block and leaves
-    # the terminal in raw mode, making every subsequent shell output invisible.
     def _sigterm_handler(signum, frame):
         try:
             import curses as _curses
@@ -357,11 +424,8 @@ def main() -> None:
     try:
         signal.signal(signal.SIGTERM, _sigterm_handler)
     except (AttributeError, OSError):
-        pass  # Windows / restricted environments
+        pass
 
-    # SIGINT (Ctrl-C) must also restore the terminal. Without this, Ctrl-C
-    # bypasses curses.wrapper's finally block and leaves the terminal in raw
-    # mode, making all subsequent shell output invisible.
     def _sigint_handler(signum, frame):
         try:
             import curses as _curses
@@ -373,12 +437,13 @@ def main() -> None:
     try:
         signal.signal(signal.SIGINT, _sigint_handler)
     except (AttributeError, OSError):
-        pass  # Windows / restricted environments
+        pass
 
     if args.mode == "host":
-        run_host(args.port)
+        nick = args.nick or "Host"
+        run_host(args.port, nick)
     elif args.mode == "connect":
-        run_connect(args.port)
+        run_connect(args.port, args.nick)
     else:
         interactive_menu(args.port)
 

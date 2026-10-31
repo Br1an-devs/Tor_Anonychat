@@ -1,27 +1,27 @@
-*TOR_ANONYCHAT*
+# TOR_ANONYCHAT
 
 ## What is it?
 
-SecureChat is a zero-knowledge ephemeral chat application that runs entirely in your terminal. Two people connect directly through a Tor hidden service using a one-time session code. When the session ends — or times out — every trace is wiped from memory. Nothing is written to disk.
-File transfer is built in. You can send any file up to 256 MB, encrypted with the same AES-256-GCM session key as your messages, with SHA-256 integrity verification on receipt.
+SecureChat is a zero-knowledge ephemeral group chat application that runs entirely in your terminal. Up to **10 people** connect directly through a Tor hidden service (or a local network) using a one-time session code. The host controls who enters — every new joiner waits in a lobby and is only admitted when the host types `/admit <nickname>`.
+
+When the session ends every trace is wiped from memory. Nothing is ever written to disk.
+
 ---
-*Security model*
 
-EncryptionAES-256-GCM — authenticated encryption, no separate MAC needed.
+## Security model
 
-Key derivationPBKDF2-HMAC-SHA256, 310,000 iterations (OWASP 2023 minimum).
+| Property | Details |
+|---|---|
+| **Encryption** | AES-256-GCM — authenticated, no separate MAC needed |
+| **Key derivation** | PBKDF2-HMAC-SHA256, 310 000 iterations (OWASP 2023 minimum) |
+| **Nonce** | 12 bytes, random per message — NIST SP 800-38D |
+| **Transport** | Tor hidden service — no IP address ever leaves any machine |
+| **Session code** | One-time use, ~60-bit entropy (12 chars from a 32-symbol Base32 alphabet) |
+| **Logs** | None. No history. No files written to disk by the app |
+| **Keepalive** | PING/PONG every 30 s — dead connections detected within ~90 s |
+| **Max users** | 1 host + up to 9 guests (10 total) |
 
-Nonce12 bytes, random per message — NIST SP 800-38D.
-
-TransportTor hidden service — no IP address ever leaves either machine.
-
-Session codeOne-time use, ~60-bit entropy (12 chars from a 32-symbol alphabet), unambiguous Base32 alphabet.
-
-LogsNone. No history. No files written to disk by the app.
-
-Timeout15-minute hard session limit, 5-minute warning.
-
-KeepalivePING/PONG every 30 seconds — dead connections detected within 40 secs.
+---
 
 ## Requirements
 
@@ -30,7 +30,7 @@ KeepalivePING/PONG every 30 seconds — dead connections detected within 40 secs
 | **OS** | Linux (Kali, Ubuntu, Debian), macOS, Git Bash / WSL on Windows |
 | **Python** | 3.8 or newer (`python3 --version`) |
 | **Library** | `cryptography` — auto-installed by `run.sh` |
-| **Network** | Both machines must be able to reach each other over TCP (same LAN, or VPN, or port-forwarded) |
+| **Network** | All machines must reach the host over TCP (same LAN, VPN, Tor, or port-forwarded) |
 
 ---
 
@@ -38,108 +38,211 @@ KeepalivePING/PONG every 30 seconds — dead connections detected within 40 secs
 
 ```bash
 # 1. Clone or download and unzip
-https://github.com/Br1an-devs/Tor_Anonychat 
+git clone https://github.com/Br1an-devs/Tor_Anonychat
 cd Tor_Anonychat
 
 # 2. Make the launcher executable
-chmod +x run_tor.sh
+chmod +x run_tor.sh run.sh
 
-# 3. (Optional) Install the Python dependency manually
+# 3. (Optional) install the Python dependency manually
 pip install cryptography
 ```
 
-That's it. No build step. No compilation.
+No build step. No compilation.
 
-**For detailed instructions on how to use secure chat [*CLICK HERE*](./Test-sample/instructions.txt)**
-# SecureChat — Tor Hidden Service
+**For full setup instructions → [`Test-sample/instructions.txt`](./Test-sample/instructions.txt)**
 
-## How to use
+---
 
-### Before first use — one-time setup (HOST only)
+## One-time Tor setup (HOST only)
 
 Run these commands once to create your hidden service and get your permanent onion address:
 
 ```bash
-# 1. Add the hidden service block to Tor config
+# 1. Add the hidden service block to the Tor config
 sudo bash -c 'printf "\n# SecureChat\nHiddenServiceDir /var/lib/tor/securechat\nHiddenServicePort 57311 127.0.0.1:57311\n" >> /etc/tor/instances/default/torrc'
 
-# If /etc/tor/instances/default/torrc does not exist on your system, use this instead:
+# If the above path does not exist on your system:
 sudo bash -c 'printf "\n# SecureChat\nHiddenServiceDir /var/lib/tor/securechat\nHiddenServicePort 57311 127.0.0.1:57311\n" >> /etc/tor/torrc'
 
-# 2. Create the hidden service directory with correct ownership that is if your encounter a problem with the auto gen option
+# 2. Create the hidden service directory
 sudo mkdir -p /var/lib/tor/securechat
 sudo chown debian-tor:debian-tor /var/lib/tor/securechat
 sudo chmod 700 /var/lib/tor/securechat
 
-# 3. Restart the Tor instance
+# 3. Restart Tor
 sudo systemctl restart tor@default
 
-# 4. Wait ~15 seconds, then read your onion address
+# 4. Wait ~15 s, then read your onion address
 sleep 15 && sudo cat /var/lib/tor/securechat/hostname
 ```
 
-Your onion address will look like:
+Your onion address looks like:
 `abcdef1234567890abcdef1234567890abcdef1234567890abcdef12.onion`
 
-**Save this address. It is permanent as long as you keep the keys. **
+**Save this address — it is permanent as long as you keep the key files.**
 
----
-
-### Get your onion address any time 
-
+Get it any time:
 ```bash
 sudo cat /var/lib/tor/securechat/hostname
 ```
 
-Or use **option ** in the app menu.
-
 ---
-**Running on LAN without TOR**
+
+## How to run
+
+### Over Tor (recommended)
+```bash
+bash run_tor.sh
+```
+
+### Over LAN without Tor
+```bash
 # Host
 bash run.sh host --port 57311
 
 # Guest
 bash run.sh connect --port 57311
+```
+
+### Directly with Python
+```bash
+# Host with a custom nickname
+python3 -m securechat host --port 57311 --nick Alice
+
+# Guest with a custom nickname
+python3 -m securechat connect --port 57311 --nick Bob
+
+# Interactive menu
+python3 -m securechat
+```
+
+---
 
 ## Session flow
 
 ### HOST
-1. Run `bash run_tor.sh`
-2. Choose **option 3** to view your onion address (or read it from terminal above)
-3. Choose **option 1** — Host a session
-4. Paste your onion address when prompted
-5. A session code is generated and displayed
-6. Send **both** the onion address and session code to your guest via phone call, Signal, or any out-of-band channel
-7. Wait for the guest to connect
+
+1. Run `bash run_tor.sh` and choose **Host a room**.
+2. Enter your nickname (or leave blank for "Host").
+3. A session code is generated and shown alongside your onion address (or LAN IP).
+4. **Share both** the address and the session code with all guests via a secure out-of-band channel (Signal, phone call, etc.).
+5. The chat panel opens immediately — you can start typing while guests connect.
+6. When a guest joins, a yellow **🔔 Waiting** bar appears at the top of the screen showing their nickname.
+7. Type `/admit <nickname>` to let them in, or `/deny <nickname>` to reject them.
+8. Repeat for each guest. The room stays open until you quit.
 
 ### GUEST
-1. Run `bash run_tor.sh`
-2. Choose **option 2** — Join a session
-3. Enter the onion address sent by the host
-4. Enter the session code sent by the host
-5. Connection established
+
+1. Run `bash run_tor.sh` and choose **Join a room**.
+2. Enter the host address (IP or `.onion`), the session code, and your nickname.
+3. You will see:
+   ```
+   Sending join request as 'Bob'...
+   Waiting for host to accept your request...
+   ```
+4. Wait. The host must type `/admit Bob` in their chat panel.
+   - If admitted → you enter the live group chat.
+   - If denied → you see the reason and the app exits cleanly.
+5. Once inside, all messages are broadcast to every participant in real time.
+
+---
+
+## Room lifetime
+
+The room and its connection stay alive **as long as the host process is running** — individual guests joining or leaving do not affect the room or the other participants.
+
+| Event | What happens |
+|---|---|
+| Guest disconnects (Ctrl+C, network drop) | Only that guest is removed. Everyone else stays. |
+| New guest connects | They enter the lobby until `/admit`-ed. Room keeps running. |
+| Host types `/kick <nick>` | That guest is removed with a BYE message. Room keeps running. |
+| Host quits (Ctrl+C or `/quit`) | BYE is sent to all guests. Room closes. |
+| Guest quits (Ctrl+C or `/quit`) | BYE is sent to host. Only that guest leaves. |
+| TCP/network error for one guest | Guest reaped after 3 missed keepalives (~90 s). Others unaffected. |
+
+---
+
+## In-chat commands
+
+### All users
+| Command | Action |
+|---|---|
+| `/help` | Show available commands |
+| `/quit` or `/exit` | Leave the session (sends BYE) |
+| `/clear` | Clear the visible message history |
+| `↑` / `↓` | Scroll through message history |
+| `Ctrl-W` | Clear the input line |
+
+### Host only
+| Command | Action |
+|---|---|
+| `/admit <nick>` | Admit a waiting guest into the room |
+| `/deny <nick>` | Reject a waiting guest (optional reason: `/deny <nick> Too late`) |
+| `/kick <nick>` | Remove an admitted guest from the room |
+| `/who` | List current participants and the waiting lobby |
+
+### File transfer (2-user / guest→host)
+| Command | Action |
+|---|---|
+| `/sendfile <path>` | Offer a file (AES-256-GCM encrypted, SHA-256 verified) |
+| `/accept` | Accept an incoming file offer |
+| `/reject` | Reject an incoming file offer |
+| Received files | Saved to `~/securechat_received/` |
+
+---
+
+## What the UI looks like
+
+**Host panel** — the yellow bar shows guests waiting for approval:
+
+```
+◈ SECURECHAT [GROUP]       ● 2 guests connected        host  14:22:01
+──────────────────────────────────────────────────────────────────────
+🔔 Waiting: Charlie  |  Diana
+──────────────────────────────────────────────────────────────────────
+[14:21:44]  ⚙  ⟶  Bob joined the room
+[14:21:59]  Alice (host)   : hey everyone
+[14:22:00]  Bob            : hello!
+──────────────────────────────────────────────────────────────────────
+›  /admit Charlie
+──────────────────────────────────────────────────────────────────────
+ /quit │ /help │ /admit <nick>  /deny <nick>  /kick <nick>  /who │ AES-256-GCM
+```
+
+**Guest panel** (while waiting):
+```
+Sending join request as 'Bob'...
+Waiting for host to accept your request...
+```
+
+**Guest panel** (admitted):
+```
+◈ SECURECHAT [GROUP]       ● Connected                  guest  14:22:00
+```
+
+*Screenshot of an actual host session:*
+<p align="center">
+  <img src="./Test-sample/host.jpeg" width="600" />
+</p>
+
+*After connection:*
+<p align="center">
+  <img src="./Test-sample/connection.jpeg" width="600" />
+</p>
 
 ---
 
 ## Security notes
 
-- Never share the onion address or session code over unencrypted channels
-- The session code is one-time use only
-- No logs, no history, no IP addresses leave either machine
-- All messages are encrypted with AES-256-GCM
+- Never share the session code or onion address over unencrypted channels.
+- The session code is one-time use — generate a new one for every session.
+- No logs, no history, no IP addresses leave any machine (over Tor).
+- All messages and files are encrypted end-to-end with AES-256-GCM.
+- The host never sees guest IP addresses — Tor hides both ends.
 
-  **THIS IS WHAT IT LOOKS LIKE**
-  *For host side*(**WLAN Ip Address Is shown just Incase it is a local Wlan connection**)
-  <p align="center">
-  <img src="./Test-sample/host.jpeg" width="600" />
-</p>
-After connection Terminal Looks Like this
-<p align="center">
-  <img src="./Test-sample/connection.jpeg" width="600" />
-</p>
+---
 
-Have fun.
-**FOR SUPPORT🤝**
-
+**FOR SUPPORT 🤝**
 
 [![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/briandevs)

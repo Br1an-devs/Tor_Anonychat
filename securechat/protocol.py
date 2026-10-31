@@ -9,7 +9,7 @@ Every message sent over the wire is:
   3. Length-framed (2-byte big-endian header)
 
 Message schema:
-  { "t": <type>, "ts": <unix_timestamp_float>, "body": <str | null> }
+  { "t": <type>, "ts": <unix_timestamp_float>, "body": <str | null>, "from": <str | null> }
 
 Types
   MSG   – normal chat message
@@ -17,11 +17,14 @@ Types
   PING  – keepalive (not shown)
   PONG  – keepalive reply (not shown)
   BYE   – orderly close notification
+  JOIN  – join-request from guest (sent after handshake, before session starts)
+  ADMIT – host admits the guest (guest proceeds to session)
+  DENY  – host denies the guest
 """
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -29,11 +32,16 @@ from . import crypto
 
 
 class MsgType(str, Enum):
-    MSG  = "MSG"
-    SYS  = "SYS"
-    PING = "PING"
-    PONG = "PONG"
-    BYE  = "BYE"
+    MSG   = "MSG"
+    SYS   = "SYS"
+    PING  = "PING"
+    PONG  = "PONG"
+    BYE   = "BYE"
+    # Multi-user lobby protocol
+    JOIN  = "JOIN"    # guest → host: "I want to join, my nickname is X"
+    ADMIT = "ADMIT"   # host → guest: "you are in, room has N users"
+    DENY  = "DENY"    # host → guest: "request rejected"
+    LEAVE = "LEAVE"   # broadcast: a user left
 
 
 @dataclass
@@ -41,6 +49,7 @@ class Message:
     mtype:  MsgType
     body:   Optional[str]
     ts:     float = 0.0
+    sender: Optional[str] = None   # nickname of sender, filled in by host relay
 
     def __post_init__(self):
         if self.ts == 0.0:
@@ -54,6 +63,7 @@ def encode_message(msg: Message) -> bytes:
         "t":    msg.mtype.value,
         "ts":   msg.ts,
         "body": msg.body,
+        "from": msg.sender,
     }, ensure_ascii=False).encode("utf-8")
 
 
@@ -63,6 +73,7 @@ def decode_message(raw: bytes) -> Message:
         mtype=MsgType(d["t"]),
         body=d.get("body"),
         ts=float(d.get("ts", 0.0)),
+        sender=d.get("from"),
     )
 
 
@@ -73,7 +84,6 @@ def send_msg(sock, msg: Message, key: bytes) -> None:
     raw       = encode_message(msg)
     encrypted = crypto.encrypt(raw, key)
     frame     = crypto.pack_frame(encrypted)
-    # sendall is atomic for frames this small
     sock.sendall(frame)
 
 
@@ -94,12 +104,9 @@ def perform_handshake_host(sock, key: bytes) -> bool:
     """
     try:
         blob = crypto.unpack_frame_from_socket(sock)
-        # Try to decrypt — failure means wrong key → reject
         try:
             plaintext = crypto.decrypt(blob, key)
         except Exception:
-            # Send a reject frame encrypted with a dummy key so the peer gets
-            # a clean error rather than a raw socket close.
             _send_raw_token(sock, crypto.HANDSHAKE_REJECT, key)
             return False
 
