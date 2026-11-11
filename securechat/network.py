@@ -52,8 +52,13 @@ def host_listen(
     timeout: int = 900,
 ) -> socket.socket:
     """
-    Bind and listen for exactly one incoming connection (legacy 2-user path).
-    Kept for backward compat; not used in multi-user mode.
+    Bind and listen for one authenticated connection (2-user mode).
+
+    After the encrypted handshake succeeds, we read the guest's JOIN message
+    and send back ADMIT so that peer_connect() can complete cleanly.
+
+    Bad connections (wrong key, scanner traffic, failed handshake) are logged
+    and discarded — the host keeps waiting for the next attempt.
     """
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -65,11 +70,10 @@ def host_listen(
             f"Try a different port with --port, or free the port."
         ) from e
 
-    srv.listen(1)
+    srv.listen(5)
     srv.settimeout(1.0)
 
     start   = time.monotonic()
-    elapsed = 0
 
     try:
         while True:
@@ -81,19 +85,36 @@ def host_listen(
                 on_waiting(elapsed)
 
             try:
-                conn, addr = srv.accept()
+                conn, _addr = srv.accept()
             except socket.timeout:
                 continue
+            except Exception:
+                continue
 
+            # Give each inbound connection a short window to complete auth.
+            # Failures are logged and skipped — the host keeps waiting.
             conn.settimeout(60)
-            ok = protocol.perform_handshake_host(conn, key)
-            if not ok:
-                conn.close()
-                time.sleep(2)
-                raise ValueError(
-                    "Handshake rejected — wrong session code, or host rejected "
-                    "the connection."
-                )
+            try:
+                ok = protocol.perform_handshake_host(conn, key)
+                if not ok:
+                    conn.close()
+                    continue
+
+                # Read the JOIN message that peer_connect() sends after handshake
+                msg = recv_msg(conn, key)
+                if msg.mtype != MsgType.JOIN or not msg.body:
+                    conn.close()
+                    continue
+
+                # Acknowledge — sends ADMIT so peer_connect() unblocks
+                send_msg(conn, Message(MsgType.ADMIT, "connected"), key)
+
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
 
             srv.close()
             conn.settimeout(None)

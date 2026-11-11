@@ -546,6 +546,8 @@ class GroupSession:
     def _guest_keepalive(self) -> None:
         """
         Shared keepalive: ping every admitted guest every KEEPALIVE_INTERVAL s.
+        All PINGs are sent in parallel (one thread per guest per cycle) so the
+        total cycle time is KEEPALIVE_TIMEOUT, not N × KEEPALIVE_TIMEOUT.
         A guest that misses MAX_MISSED_PINGS consecutive PONGs is reaped.
         This detects crashed/network-dead guests without killing the room.
         Guests on slow links (Tor, proxychains) need the generous timeout.
@@ -558,22 +560,37 @@ class GroupSession:
             with self._guests_lock:
                 handles = list(self._guests.values())
 
-            dead = []
-            for h in handles:
+            # --- Send all PINGs and wait in parallel --------------------------
+            dead_lock   = threading.Lock()
+            dead        = []
+
+            def _ping_one(h: GuestHandle) -> None:
                 if not h.alive:
-                    dead.append(h.nickname)
-                    continue
+                    with dead_lock:
+                        dead.append(h.nickname)
+                    return
                 h.pong_event.clear()
-                # Send PING; if the socket is already dead, send() returns False
                 if not h.send(Message(MsgType.PING, None)):
-                    dead.append(h.nickname)
-                    continue
+                    with dead_lock:
+                        dead.append(h.nickname)
+                    return
                 if not h.pong_event.wait(timeout=KEEPALIVE_TIMEOUT):
                     h.missed_pings += 1
                     if h.missed_pings >= MAX_MISSED_PINGS:
-                        dead.append(h.nickname)
+                        with dead_lock:
+                            dead.append(h.nickname)
                 else:
-                    h.missed_pings = 0   # reset on any successful PONG
+                    h.missed_pings = 0  # reset on any successful PONG
+
+            ping_threads = [
+                threading.Thread(target=_ping_one, args=(h,), daemon=True)
+                for h in handles
+            ]
+            for t in ping_threads:
+                t.start()
+            for t in ping_threads:
+                t.join(timeout=KEEPALIVE_TIMEOUT + 2)
+            # -----------------------------------------------------------------
 
             if dead:
                 self._reap_dead(dead)

@@ -292,16 +292,29 @@ class ChatUI:
                 self.push_system("Usage: /kick <nickname>")
                 return None
             nick = parts[1].strip()
-            # Find and close the guest handle
+            # Use _reap_dead so the guest reader doesn't double-broadcast.
+            # Mark the handle dead and close the socket first so the reader
+            # thread gets a ConnectionError and exits without broadcasting again.
             with self._session._guests_lock:
-                handle = self._session._guests.pop(nick, None)
+                handle = self._session._guests.get(nick)
             if handle:
-                handle.close("Kicked by host")
+                # Mark dead BEFORE closing so _guest_reader's pop finds nothing
+                handle.alive = False
+                try:
+                    handle.close("Kicked by host")
+                except Exception:
+                    pass
+                with self._session._guests_lock:
+                    self._session._guests.pop(nick, None)
+                kick_text = f"⟵  {nick} was removed by the host."
                 self.push_system(f"⟵  Kicked '{nick}' from the room.")
-                self._session._broadcast_system(f"⟵  {nick} was removed by the host.")
-                self._session._on_message(
-                    Message(MsgType.SYS, f"⟵  {nick} was removed by the host."), "system"
-                )
+                self._session._broadcast_system(kick_text)
+                try:
+                    self._session._on_message(
+                        Message(MsgType.SYS, kick_text), "system"
+                    )
+                except Exception:
+                    pass
             else:
                 self.push_system(f"No connected user named '{nick}'.")
             return None
@@ -516,7 +529,10 @@ class ChatUI:
     def _draw_cursor(self, h: int, w: int) -> None:
         prompt_len = 3
         row = h - 2
-        col = min(prompt_len + self._cursor, w - 2)
+        visible_w  = w - prompt_len - 2
+        view_start = max(0, self._cursor - visible_w + 1)
+        # Cursor column is relative to view_start, not the absolute buffer position
+        col = min(prompt_len + (self._cursor - view_start), w - 2)
         try:
             self._stdscr.move(row, col)
         except curses.error:
